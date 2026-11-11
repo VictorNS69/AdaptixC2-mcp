@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-// AdaptixC2 MCP server — read-only recon surface (0.1.0 scaffold).
+// AdaptixC2 MCP server — recon + artifact surface.
 //
 // Every tool is a call against the teamserver's authenticated REST control
 // plane (Gin + JWT). No Qt GUI, no WebSocket sync channel, no console typing.
-// The read-only tools map 1:1 onto GET endpoints. Command execution and the
-// scope-bound execution gate land in the next milestone (README §The
+// Read-only tools map onto GET endpoints; listener_create and agent_generate
+// map onto POST /listener/create and POST /agent/generate. Command execution
+// and the scope-bound execution gate land in the next milestone (README §The
 // execution gate).
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -15,6 +16,8 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import fs from "node:fs";
+import path from "node:path";
 
 import { AdaptixClient, AdaptixConfig, loadConfig } from "./adaptix.js";
 
@@ -25,7 +28,7 @@ const AGENT_ID = {
   description: "Agent id from adaptix_agent_list.",
 } as const;
 
-const readTools: Tool[] = [
+const tools: Tool[] = [
   {
     name: "adaptix_server_status",
     description:
@@ -45,6 +48,21 @@ const readTools: Tool[] = [
     description: "List listeners and their state. Read-only.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "adaptix_listener_create",
+    description:
+      "Start a listener. name is the operator-facing listener name; type is the listener kind (e.g. BeaconHTTP, GopherTCP); config is a JSON string of that listener's options. Returns the teamserver's {ok, message}.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Operator-facing listener name (unique)." },
+        type: { type: "string", description: "Listener kind, e.g. GopherTCP or BeaconHTTP." },
+        config: { type: "string", description: "JSON string of the listener's options." },
+      },
+      required: ["name", "type", "config"],
+    },
+    annotations: { destructiveHint: true },
   },
   {
     name: "adaptix_task_list",
@@ -73,14 +91,33 @@ const readTools: Tool[] = [
     inputSchema: { type: "object" as const, properties: {}, required: [] },
     annotations: { readOnlyHint: true },
   },
+  {
+    name: "adaptix_agent_generate",
+    description:
+      "Build an agent artifact. agent is the agent kind (beacon, kharon, gopher); listener_name is the listener it calls back to; config is a JSON string of build options (os, arch, format, sleep, ...). Writes the binary to output_dir and returns its path.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent: { type: "string", description: "Agent kind: beacon, kharon or gopher." },
+        listener_name: { type: "string", description: "Listener name the agent calls back to." },
+        config: { type: "string", description: "JSON string of the agent's build options." },
+        output_dir: {
+          type: "string",
+          description: "Directory to write the artifact (default ADAPTIX_OUTPUT_DIR or ./adaptix-artifacts).",
+        },
+      },
+      required: ["agent", "listener_name", "config"],
+    },
+    annotations: { destructiveHint: true },
+  },
 ];
 
 const server = new Server(
-  { name: "adaptixc2-mcp", version: "0.1.0" },
+  { name: "adaptixc2-mcp", version: "0.2.0" },
   { capabilities: { tools: {} } },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: readTools }));
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params.name;
@@ -119,6 +156,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify(await api.agentList(), null, 2) }] };
       case "adaptix_listener_list":
         return { content: [{ type: "text", text: JSON.stringify(await api.listenerList(), null, 2) }] };
+      case "adaptix_listener_create": {
+        const listenerName = str("name");
+        const type = str("type");
+        const config = str("config");
+        if (!listenerName || !type || !config) throw new Error("name, type and config are required");
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(await api.listenerCreate(listenerName, type, config), null, 2),
+            },
+          ],
+        };
+      }
       case "adaptix_task_list": {
         const agentId = str("agent_id");
         if (!agentId) throw new Error("agent_id is required");
@@ -135,6 +186,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify(await api.targetsList(), null, 2) }] };
       case "adaptix_creds_list":
         return { content: [{ type: "text", text: JSON.stringify(await api.credsList(), null, 2) }] };
+      case "adaptix_agent_generate": {
+        const agent = str("agent");
+        const listener = str("listener_name");
+        const config = str("config");
+        if (!agent || !listener || !config) throw new Error("agent, listener_name and config are required");
+        const { fileName, content } = await api.agentGenerate(agent, [listener], config);
+        const outputDir = str("output_dir", cfg.outputDir);
+        fs.mkdirSync(outputDir, { recursive: true });
+        const outPath = path.join(outputDir, fileName);
+        fs.writeFileSync(outPath, content);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { ok: true, agent, listener, fileName, path: outPath, bytes: content.length },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
       default:
         throw new Error(`unknown tool: ${name}`);
     }

@@ -75,15 +75,17 @@ function startServer() {
 }
 
 const EXPECTED = [
+  "adaptix_agent_generate",
   "adaptix_agent_list",
   "adaptix_creds_list",
+  "adaptix_listener_create",
   "adaptix_listener_list",
   "adaptix_server_status",
   "adaptix_targets_list",
   "adaptix_task_list",
 ];
 
-test("exposes the six read-only tools without a teamserver", async () => {
+test("exposes the eight tools without a teamserver", async () => {
   const { child, client } = startServer();
   try {
     await client.init();

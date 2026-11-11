@@ -1,6 +1,6 @@
 {
   "name": "adaptixc2-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for AdaptixC2 — post-exploitation over the teamserver's authenticated REST control plane, with a scope-bound execution gate and an optional observer UI",
   "main": "dist/index.js",
   "type": "module",

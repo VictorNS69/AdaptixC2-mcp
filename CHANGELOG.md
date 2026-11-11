@@ -2,6 +2,20 @@
 
 Versions below are this project's.
 
+## 0.2.0 — 2026-11-11
+
+Artifact surface: generate agents and start listeners over the REST API.
+
+### Added
+
+- `adaptix_listener_create` — start a listener (`POST /listener/create`) with a
+  JSON-string config.
+- `adaptix_agent_generate` — build an agent artifact (`POST /agent/generate`),
+  decode the base64 `fileName:content` payload, and write the binary to
+  `ADAPTIX_OUTPUT_DIR`.
+- `ADAPTIX_OUTPUT_DIR` config for the artifact output directory.
+- Smoke test now asserts the eight-tool surface.
+
 ## 0.1.0 — 2026-11-11
 
 Initial scaffold. Read-only recon surface over the AdaptixC2 v1.2 REST API.

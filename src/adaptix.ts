@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 
-// AdaptixC2 v1.2 REST client — read-only surface.
+// AdaptixC2 v1.2 REST client — recon + artifact surface.
 //
 // Every call is an authenticated HTTP(S) request to the teamserver's REST
 // control plane (Gin + JWT). Nothing here drives the Qt GUI, opens the
-// WebSocket sync channel, or shells out to a console. The read-only tools use
-// the REST endpoints, which is enough for recon and completed-task output
-// (GET /agent/task/list).
+// WebSocket sync channel, or shells out to a console. Read-only tools use the
+// GET endpoints; the two write tools map onto POST /listener/create and
+// POST /agent/generate.
 
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
 
 export interface AdaptixConfig {
-  endpoint: string;   // teamserver base URL incl. the profile path, e.g. https://127.0.0.1:4321/endpoint
+  endpoint: string;   // teamserver base URL incl. the profile path, e.g. https://127.0.0.1:4321/ts
   username: string;
   password: string;
   version: string;    // target server version; sent as the login `version` claim (pins v1.2)
   ca?: string;        // PEM bundle to trust (the teamserver's self-signed server.rsa.crt)
   insecureTls: boolean; // debug only: accept any certificate
+  outputDir: string;  // where adaptix_agent_generate writes built artifacts
 }
 
 export class AdaptixApiError extends Error {
@@ -122,6 +123,10 @@ export class AdaptixClient {
     return this.request("GET", "/listener/list");
   }
 
+  listenerCreate(name: string, type: string, config: string): Promise<unknown> {
+    return this.request("POST", "/listener/create", { name, type, config });
+  }
+
   taskList(agentId: string, limit: number, offset: number): Promise<unknown> {
     return this.request(
       "GET",
@@ -136,12 +141,32 @@ export class AdaptixClient {
   credsList(): Promise<unknown> {
     return this.request("GET", "/creds/list");
   }
+
+  async agentGenerate(
+    agent: string,
+    listeners: string[],
+    config: string,
+  ): Promise<{ fileName: string; content: Buffer }> {
+    const res = (await this.request("POST", "/agent/generate", {
+      agent,
+      listener_name: listeners,
+      config,
+    })) as { message?: string; ok?: boolean };
+    const msg = res.message ?? "";
+    const sep = msg.indexOf(":");
+    if (sep < 0) {
+      throw new AdaptixApiError(`generate: no fileName:content payload (${msg.slice(0, 80)})`);
+    }
+    const fileName = Buffer.from(msg.slice(0, sep), "base64").toString("utf8");
+    const content = Buffer.from(msg.slice(sep + 1), "base64");
+    return { fileName, content };
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptixConfig {
   const endpoint = env.ADAPTIX_ENDPOINT?.trim();
   if (!endpoint) {
-    throw new Error("ADAPTIX_ENDPOINT is required (e.g. https://127.0.0.1:4321/endpoint)");
+    throw new Error("ADAPTIX_ENDPOINT is required (e.g. https://127.0.0.1:4321/ts)");
   }
   const password = env.ADAPTIX_PASSWORD ?? "";
   if (!password) {
@@ -154,5 +179,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptixConfig 
     version: env.ADAPTIX_VERSION?.trim() || "v1.2",
     ca: env.ADAPTIX_CA?.trim() || undefined,
     insecureTls: env.ADAPTIX_TLS_INSECURE === "1",
+    outputDir: env.ADAPTIX_OUTPUT_DIR?.trim() || "./adaptix-artifacts",
   };
 }
