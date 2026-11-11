@@ -127,6 +127,22 @@ export class AdaptixClient {
     return this.request("POST", "/listener/create", { name, type, config });
   }
 
+  listenerStop(name: string, type: string): Promise<unknown> {
+    return this.request("POST", "/listener/stop", { name, type });
+  }
+
+  listenerPause(name: string, type: string): Promise<unknown> {
+    return this.request("POST", "/listener/pause", { name, type });
+  }
+
+  listenerResume(name: string, type: string): Promise<unknown> {
+    return this.request("POST", "/listener/resume", { name, type });
+  }
+
+  listenerEdit(name: string, type: string, config: string): Promise<unknown> {
+    return this.request("POST", "/listener/edit", { name, type, config });
+  }
+
   taskList(agentId: string, limit: number, offset: number): Promise<unknown> {
     return this.request(
       "GET",

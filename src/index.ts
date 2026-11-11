@@ -65,6 +65,63 @@ const tools: Tool[] = [
     annotations: { destructiveHint: true },
   },
   {
+    name: "adaptix_listener_stop",
+    description:
+      "Stop a running listener. name is the operator-facing listener name; type is the listener kind. Returns the teamserver's {ok, message}.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Listener name (from adaptix_listener_list)." },
+        type: { type: "string", description: "Listener kind, e.g. GopherTCP or BeaconHTTP." },
+      },
+      required: ["name", "type"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_listener_pause",
+    description:
+      "Pause a running listener without stopping it. name and type identify the listener. Returns {ok, message}.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Listener name (from adaptix_listener_list)." },
+        type: { type: "string", description: "Listener kind, e.g. GopherTCP or BeaconHTTP." },
+      },
+      required: ["name", "type"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_listener_resume",
+    description:
+      "Resume a paused listener. name and type identify the listener. Returns {ok, message}.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Listener name (from adaptix_listener_list)." },
+        type: { type: "string", description: "Listener kind, e.g. GopherTCP or BeaconHTTP." },
+      },
+      required: ["name", "type"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_listener_edit",
+    description:
+      "Edit a running listener's configuration. name and type identify the listener; config is the new JSON string of its options.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Listener name (from adaptix_listener_list)." },
+        type: { type: "string", description: "Listener kind, e.g. GopherTCP or BeaconHTTP." },
+        config: { type: "string", description: "JSON string of the new listener options." },
+      },
+      required: ["name", "type", "config"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
     name: "adaptix_task_list",
     description:
       "List completed tasks for an agent, including the command output (Text field). Poll this after running a command; output is asynchronous. Read-only.",
@@ -167,6 +224,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: "text",
               text: JSON.stringify(await api.listenerCreate(listenerName, type, config), null, 2),
             },
+          ],
+        };
+      }
+      case "adaptix_listener_stop": {
+        const listenerName = str("name");
+        const type = str("type");
+        if (!listenerName || !type) throw new Error("name and type are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.listenerStop(listenerName, type), null, 2) },
+          ],
+        };
+      }
+      case "adaptix_listener_pause": {
+        const listenerName = str("name");
+        const type = str("type");
+        if (!listenerName || !type) throw new Error("name and type are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.listenerPause(listenerName, type), null, 2) },
+          ],
+        };
+      }
+      case "adaptix_listener_resume": {
+        const listenerName = str("name");
+        const type = str("type");
+        if (!listenerName || !type) throw new Error("name and type are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.listenerResume(listenerName, type), null, 2) },
+          ],
+        };
+      }
+      case "adaptix_listener_edit": {
+        const listenerName = str("name");
+        const type = str("type");
+        const config = str("config");
+        if (!listenerName || !type || !config) throw new Error("name, type and config are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.listenerEdit(listenerName, type, config), null, 2) },
           ],
         };
       }
