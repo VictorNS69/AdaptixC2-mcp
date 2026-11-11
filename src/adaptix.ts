@@ -177,6 +177,18 @@ export class AdaptixClient {
     const content = Buffer.from(msg.slice(sep + 1), "base64");
     return { fileName, content };
   }
+
+  agentCommandExecute(agentId: string, cmdline: string, data: string, waitAnswer: boolean): Promise<unknown> {
+    return this.request("POST", "/agent/command/execute", {
+      id: agentId,
+      ui: false,
+      cmdline,
+      data,
+      ax_hook_id: "",
+      ax_handler_id: "",
+      wait_answer: waitAnswer,
+    });
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptixConfig {

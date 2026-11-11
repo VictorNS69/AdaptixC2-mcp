@@ -167,6 +167,22 @@ const tools: Tool[] = [
     },
     annotations: { destructiveHint: true },
   },
+  {
+    name: "adaptix_agent_command_execute",
+    description:
+      "Run a command on an agent. cmdline is the agent command name (e.g. shell, sleep, cat, socks, exit); data is a JSON string of that command's arguments (e.g. {\"command\":\"id\"}). Set wait_answer true to get the result inline; otherwise poll adaptix_task_list for the output.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: AGENT_ID,
+        cmdline: { type: "string", description: "Agent command name, e.g. shell, sleep, cat, socks, exit." },
+        data: { type: "string", description: "JSON string of the command's arguments (default \"{}\")." },
+        wait_answer: { type: "boolean", description: "Wait for the command result inline (default false)." },
+      },
+      required: ["agent_id", "cmdline"],
+    },
+    annotations: { destructiveHint: true },
+  },
 ];
 
 const server = new Server(
@@ -303,6 +319,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 null,
                 2,
               ),
+            },
+          ],
+        };
+      }
+      case "adaptix_agent_command_execute": {
+        const agentId = str("agent_id");
+        const cmdline = str("cmdline");
+        if (!agentId || !cmdline) throw new Error("agent_id and cmdline are required");
+        const data = str("data", "{}");
+        const waitAnswer = args["wait_answer"] === true;
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(await api.agentCommandExecute(agentId, cmdline, data, waitAnswer), null, 2),
             },
           ],
         };
