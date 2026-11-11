@@ -78,6 +78,7 @@ const EXPECTED = [
   "adaptix_agent_command_execute",
   "adaptix_agent_generate",
   "adaptix_agent_list",
+  "adaptix_agent_remove",
   "adaptix_creds_list",
   "adaptix_listener_create",
   "adaptix_listener_edit",
@@ -87,6 +88,8 @@ const EXPECTED = [
   "adaptix_listener_stop",
   "adaptix_server_status",
   "adaptix_targets_list",
+  "adaptix_task_cancel",
+  "adaptix_task_delete",
   "adaptix_task_list",
 ];
 

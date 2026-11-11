@@ -189,6 +189,18 @@ export class AdaptixClient {
       wait_answer: waitAnswer,
     });
   }
+
+  agentRemove(agentIds: string[]): Promise<unknown> {
+    return this.request("POST", "/agent/remove", { agent_id_array: agentIds });
+  }
+
+  taskCancel(agentId: string, taskIds: string[]): Promise<unknown> {
+    return this.request("POST", "/agent/task/cancel", { agent_id: agentId, tasks_array: taskIds });
+  }
+
+  taskDelete(agentId: string, taskIds: string[]): Promise<unknown> {
+    return this.request("POST", "/agent/task/delete", { agent_id: agentId, tasks_array: taskIds });
+  }
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AdaptixConfig {

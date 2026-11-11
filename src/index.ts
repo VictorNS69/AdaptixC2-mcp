@@ -183,6 +183,51 @@ const tools: Tool[] = [
     },
     annotations: { destructiveHint: true },
   },
+  {
+    name: "adaptix_agent_remove",
+    description:
+      "Remove agents from the teamserver (e.g. dead beacons). agent_ids is the list of agent ids from adaptix_agent_list.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Agent ids from adaptix_agent_list.",
+        },
+      },
+      required: ["agent_ids"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_task_cancel",
+    description:
+      "Cancel queued tasks for an agent. task_ids is the list of task ids from adaptix_task_list.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: AGENT_ID,
+        task_ids: { type: "array", items: { type: "string" }, description: "Task ids from adaptix_task_list." },
+      },
+      required: ["agent_id", "task_ids"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_task_delete",
+    description:
+      "Delete completed tasks for an agent. task_ids is the list of task ids from adaptix_task_list.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: AGENT_ID,
+        task_ids: { type: "array", items: { type: "string" }, description: "Task ids from adaptix_task_list." },
+      },
+      required: ["agent_id", "task_ids"],
+    },
+    annotations: { destructiveHint: true },
+  },
 ];
 
 const server = new Server(
@@ -205,6 +250,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
     return fallback;
+  };
+  const arr = (key: string): string[] => {
+    const value = args[key];
+    if (Array.isArray(value)) return value.map((v) => String(v)).filter((v) => v !== "");
+    if (typeof value === "string" && value.trim() !== "") {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed.map((v) => String(v)).filter((v) => v !== "");
+      } catch {
+        /* not JSON */
+      }
+      return value.split(",").map((v) => v.trim()).filter((v) => v !== "");
+    }
+    return [];
   };
 
   try {
@@ -335,6 +394,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: "text",
               text: JSON.stringify(await api.agentCommandExecute(agentId, cmdline, data, waitAnswer), null, 2),
             },
+          ],
+        };
+      }
+      case "adaptix_agent_remove": {
+        const agentIds = arr("agent_ids");
+        if (agentIds.length === 0) throw new Error("agent_ids must be a non-empty array");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.agentRemove(agentIds), null, 2) },
+          ],
+        };
+      }
+      case "adaptix_task_cancel": {
+        const agentId = str("agent_id");
+        const taskIds = arr("task_ids");
+        if (!agentId || taskIds.length === 0) throw new Error("agent_id and non-empty task_ids are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.taskCancel(agentId, taskIds), null, 2) },
+          ],
+        };
+      }
+      case "adaptix_task_delete": {
+        const agentId = str("agent_id");
+        const taskIds = arr("task_ids");
+        if (!agentId || taskIds.length === 0) throw new Error("agent_id and non-empty task_ids are required");
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(await api.taskDelete(agentId, taskIds), null, 2) },
           ],
         };
       }
