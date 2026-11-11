@@ -1,0 +1,50 @@
+{
+  "name": "adaptixc2-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for AdaptixC2 — post-exploitation over the teamserver's authenticated REST control plane, with a scope-bound execution gate and an optional observer UI",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "adaptix",
+    "adaptixc2",
+    "c2",
+    "post-exploitation",
+    "pentest",
+    "red-team"
+  ],
+  "author": "Víctor Nieves",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "USAGE.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VictorNS69/AdaptixC2-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VictorNS69/AdaptixC2-mcp/issues"
+  },
+  "homepage": "https://github.com/VictorNS69/AdaptixC2-mcp#readme"
+}

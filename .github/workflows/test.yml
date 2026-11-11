@@ -1,0 +1,35 @@
+name: test
+
+# The smoke suite drives the built server over real MCP stdio and asserts the
+# read-only tool surface. It needs no teamserver, no network and no TLS
+# material, which makes it a cheap gate for dependency PRs, including
+# Dependabot's.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "${{ matrix.node }}"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: audit (report only)
+        # Advisory visibility, not a gate: an advisory in a transitive
+        # dev-time package must not block a fix. Keep it visible instead.
+        continue-on-error: true
+        run: npm audit --omit=dev
