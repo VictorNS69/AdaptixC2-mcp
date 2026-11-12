@@ -135,46 +135,31 @@ The password is held in memory only and is never logged or returned.
 }
 ```
 
-## Typical flow
+## Using it (primitives)
 
-Recon:
+This server exposes calls, not a plan. It starts no teamserver, chooses no
+target, and keeps no engagement state: which hosts get an agent, in what order,
+where artifacts are delivered and what is cleaned up belong to the client that
+runs it (in BITORIA that is `skills/c2/SKILL.md`, with
+`scripts/c2/adaptix_teamserver.sh` owning the teamserver itself).
 
-1. `adaptix_server_status` — confirm auth and the pinned version.
-2. `adaptix_agent_list` — enumerate connected agents.
-3. `adaptix_task_list` — read completed command output for an agent.
+The primitives, in the order a client usually needs them:
 
-### Beacons on several hosts (the CTF shape: 4 targets, 4 agents)
+1. `adaptix_server_status` — proves auth, endpoint and the pinned version.
+2. `adaptix_listener_create` (`type` + that extender's config JSON) — returns
+   `verified: true` only if the listener really is in `/listener/list`.
+3. `adaptix_agent_generate` — build per host; `label` is the caller's tag for
+   the host and lands in the filename, so several builds stay several files.
+4. `adaptix_agent_wait` — poll for check-in (`expected`, `match`), for a caller
+   that needs proof a host is live before tasking it.
+5. `adaptix_agent_command_execute` — task an agent; `wait_answer:true` for the
+   result inline, otherwise `adaptix_task_list` (output is asynchronous).
+6. Cleanup primitives for whoever owns the engagement: `adaptix_agent_remove`,
+   `adaptix_task_delete`, `adaptix_listener_stop`.
 
-The MCP does the C2 half of this; delivery to each host is yours (a web
-listener, an SMB share, an existing shell). One loop per host, then one wait:
-
-1. **One listener, once.** `adaptix_listener_create` with the type
-   (`BeaconHTTP`, `GopherTCP`, …) and that type's config JSON. It returns
-   `verified: true` only if `/listener/list` shows it. Name it for the
-   engagement (`ctf-http`) — every build below names it.
-2. **One artifact per host, labelled.** `adaptix_agent_generate`
-   `{agent:"beacon", listener_name:"ctf-http", config:"{\"os\":\"linux\",\"arch\":\"amd64\",\"format\":\"elf\"}", label:"10.10.10.5"}`
-   → `path: .../beacon-10.10.10.5.elf`. Repeat per host; no overwrite, no
-   ambiguity. `output_dir` should be the assessment's own artifact directory.
-3. **Deliver** each artifact to its host and execute it.
-4. **Wait for check-in.** `adaptix_agent_wait {expected:1, match:"10.10.10.5"}`
-   after each delivery, or `{expected:4}` once after the batch. It polls
-   `/agent/list` and returns the agents it saw; a timeout is `ok:false` with the
-   count, never a silent success. No check-in means the payload did not run,
-   could not egress, or calls a different listener — `adaptix_listener_list`
-   tells you which.
-5. **Task them.** `adaptix_agent_command_execute {agent_id, cmdline:"shell",
-   data:"{\"command\":\"id\"}", wait_answer:true}` for the inline answer, or
-   `wait_answer:false` and read `adaptix_task_list` (output is asynchronous).
-6. **Map agents to hosts** with `adaptix_agent_list`, and record the mapping:
-   the same host re-beaconing after a restart gets a new id.
-7. **Cleanup.** `adaptix_agent_remove {agent_ids:[...]}` for dead or finished
-   beacons, `adaptix_task_delete` for their task history. Stopping the listener
-   last (`adaptix_listener_stop`) keeps re-connects possible while you work.
-
-Agent-side command names and their `data` shapes are Adaptix's, not this
-server's: `shell`, `sleep`, `cat`, `cd`, `ps`, `socks`, `exit`, … A command the
-agent does not implement comes back as a task error in `adaptix_task_list`.
+Agent command names and their `data` shapes are Adaptix's, not this server's
+(`shell`, `sleep`, `cat`, `cd`, `ps`, `socks`, `exit`, …); a command the agent
+does not implement comes back as a task error in `adaptix_task_list`.
 
 ## The execution gate
 
