@@ -169,12 +169,34 @@ export class AdaptixClient {
       config,
     })) as { message?: string; ok?: boolean };
     const msg = res.message ?? "";
+    // The teamserver answers HTTP 200 with ok:false and the reason in
+    // `message` for a rejected build (bad arch/format name, a numeric `sleep`,
+    // a listener that is not running). Those reasons contain colons, so the
+    // old "split on the first colon and base64 the halves" path decoded the
+    // error text into a 46-byte garbage "artifact" and reported success —
+    // measured 2026-11-12: "json: cannot unmarshal JSON number into
+    // GenerateConfig.sleep" became a file called "\ufffd\ufffd'-10.10.10.5".
+    if (res.ok !== true) {
+      throw new AdaptixApiError(`generate failed: ${msg.slice(0, 300) || "no message"}`);
+    }
     const sep = msg.indexOf(":");
     if (sep < 0) {
-      throw new AdaptixApiError(`generate: no fileName:content payload (${msg.slice(0, 80)})`);
+      throw new AdaptixApiError(`generate: no base64(fileName):base64(content) payload (${msg.slice(0, 80)})`);
     }
-    const fileName = Buffer.from(msg.slice(0, sep), "base64").toString("utf8");
+    const nameB64 = msg.slice(0, sep);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(nameB64)) {
+      throw new AdaptixApiError(`generate: filename half is not base64 (${nameB64.slice(0, 60)})`);
+    }
+    const fileName = Buffer.from(nameB64, "base64").toString("utf8");
+    // A real build name is a plain filename; control characters mean the
+    // payload shape changed and decoding guessed.
+    if (!/^[A-Za-z0-9._ -]{1,120}$/.test(fileName)) {
+      throw new AdaptixApiError(`generate: decoded filename looks wrong (${JSON.stringify(fileName)})`);
+    }
     const content = Buffer.from(msg.slice(sep + 1), "base64");
+    if (content.length === 0) {
+      throw new AdaptixApiError("generate: empty artifact from the teamserver");
+    }
     return { fileName, content };
   }
 
