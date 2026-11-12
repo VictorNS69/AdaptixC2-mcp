@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AdaptixClient, AdaptixConfig, loadConfig } from "./adaptix.js";
+import { artifactPath } from "./artifacts.js";
 
 const cfg: AdaptixConfig = loadConfig();
 
@@ -27,6 +28,33 @@ const AGENT_ID = {
   type: "string",
   description: "Agent id from adaptix_agent_list.",
 } as const;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The agent records in a /agent/list payload, whatever shape it arrives in. */
+function agentArray(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === "object") {
+    const obj = payload as Record<string, unknown>;
+    for (const key of ["agents", "Agents", "list", "data"]) {
+      const value = obj[key];
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === "object") {
+        const values = Object.values(value as Record<string, unknown>);
+        if (values.length > 0 && values.every((v) => v && typeof v === "object")) return values;
+      }
+    }
+  }
+  return [];
+}
+
+/** Agents present, optionally only those whose record mentions `match` (IP, hostname, listener). */
+function countAgents(payload: unknown, match: string): number {
+  const wanted = match.trim().toLowerCase();
+  return agentArray(payload).filter(
+    (a) => wanted === "" || JSON.stringify(a).toLowerCase().includes(wanted),
+  ).length;
+}
 
 const tools: Tool[] = [
   {
@@ -41,6 +69,26 @@ const tools: Tool[] = [
     description:
       "List connected agents (beacons): id, name, host, user, OS, listener and state. Read-only.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "adaptix_agent_wait",
+    description:
+      "Wait for beacons to check in, then return them. Polls GET /agent/list until at least `expected` agents are present — optionally only those whose record contains `match` (an IP, hostname or listener name) — and reports the count it reached. Meant for the multi-host case: generate and deliver an artifact per host, then one call here per host (expected 1, match <host>) or one call with expected N after a batch. A timeout returns ok:false with the count and the agents it did see, never a silent success.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        expected: { type: "number", description: "How many agents to wait for (default 1)." },
+        match: {
+          type: "string",
+          description:
+            "Only count agents whose JSON record contains this substring — the target IP or hostname you delivered to.",
+        },
+        timeout_s: { type: "number", description: "Give up after this many seconds (default 60)." },
+        interval_s: { type: "number", description: "Poll interval in seconds (default 3)." },
+      },
+      required: [],
+    },
     annotations: { readOnlyHint: true },
   },
   {
@@ -151,7 +199,7 @@ const tools: Tool[] = [
   {
     name: "adaptix_agent_generate",
     description:
-      "Build an agent artifact. agent is the agent kind (beacon, kharon, gopher); listener_name is the listener it calls back to; config is a JSON string of build options (os, arch, format, sleep, ...). Writes the binary to output_dir and returns its path.",
+      "Build an agent artifact. agent is the agent kind (beacon, kharon, gopher); listener_name is the listener it calls back to; config is a JSON string of build options (os, arch, format, sleep, ...); label names the host it is for and is folded into the filename. Writes the binary to output_dir and returns its path. Never overwrites an earlier build.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -161,6 +209,11 @@ const tools: Tool[] = [
         output_dir: {
           type: "string",
           description: "Directory to write the artifact (default ADAPTIX_OUTPUT_DIR or ./adaptix-artifacts).",
+        },
+        label: {
+          type: "string",
+          description:
+            "Tag folded into the filename so builds for several hosts never collide or overwrite: pass the target IP or hostname (agent-10.10.10.5.exe). Omitted = the teamserver's own name, with -2/-3 appended rather than overwriting.",
         },
       },
       required: ["agent", "listener_name", "config"],
@@ -286,6 +339,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       case "adaptix_agent_list":
         return { content: [{ type: "text", text: JSON.stringify(await api.agentList(), null, 2) }] };
+      case "adaptix_agent_wait": {
+        const expected = Math.max(1, num("expected", 1));
+        const match = str("match");
+        const timeoutS = Math.max(1, num("timeout_s", 60));
+        const intervalS = Math.max(1, num("interval_s", 3));
+        const deadline = Date.now() + timeoutS * 1000;
+        let agents: unknown = null;
+        let count = 0;
+        for (;;) {
+          agents = await api.agentList();
+          count = countAgents(agents, match);
+          if (count >= expected) break;
+          const left = deadline - Date.now();
+          if (left <= 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(
+                    {
+                      ok: false,
+                      expected,
+                      count,
+                      match: match || null,
+                      waited_s: Math.round((timeoutS * 1000 - left) / 1000),
+                      detail:
+                        `only ${count} of ${expected} agent(s) checked in within ${timeoutS}s` +
+                        (match ? ` matching '${match}'` : "") +
+                        ". The agent binary did not run, could not reach the listener (egress, wrong" +
+                        " callback host/port, TLS on a plain listener), or the listener is not the one the" +
+                        " build calls back to — adaptix_listener_list shows listener state.",
+                      agents,
+                    },
+                    null,
+                    2,
+                  ),
+                },
+              ],
+              isError: true,
+            };
+          }
+          await sleep(Math.min(intervalS * 1000, left));
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { ok: true, expected, count, match: match || null, agents },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
       case "adaptix_listener_list":
         return { content: [{ type: "text", text: JSON.stringify(await api.listenerList(), null, 2) }] };
       case "adaptix_listener_create": {
@@ -293,11 +402,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const type = str("type");
         const config = str("config");
         if (!listenerName || !type || !config) throw new Error("name, type and config are required");
+        const created = await api.listenerCreate(listenerName, type, config);
+        // The teamserver answers these with HTTP 200 and an {ok, message} body,
+        // so a rejected config (bad port, unknown handler, listener already
+        // running) reads as success. Confirm on the teamserver's own state
+        // before reporting one: a listener nobody can call back to is the one
+        // failure that shows up 20 minutes later as "beacons never arrive".
+        const listed = JSON.stringify(await api.listenerList());
+        if (!listed.includes(listenerName)) {
+          throw new Error(
+            `listener '${listenerName}' is not in /listener/list after create — it did not start. ` +
+              `teamserver said: ${JSON.stringify(created).slice(0, 300)}. ` +
+              "Check the listener type (e.g. GopherTCP, BeaconHTTP) and the config fields it takes; " +
+              "adaptix_listener_list shows what is actually running.",
+          );
+        }
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(await api.listenerCreate(listenerName, type, config), null, 2),
+              text: JSON.stringify({ verified: true, listener: listenerName, type, created }, null, 2),
             },
           ],
         };
@@ -363,18 +487,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const agent = str("agent");
         const listener = str("listener_name");
         const config = str("config");
+        const label = str("label");
         if (!agent || !listener || !config) throw new Error("agent, listener_name and config are required");
         const { fileName, content } = await api.agentGenerate(agent, [listener], config);
         const outputDir = str("output_dir", cfg.outputDir);
         fs.mkdirSync(outputDir, { recursive: true });
-        const outPath = path.join(outputDir, fileName);
+        const outPath = artifactPath(outputDir, fileName, label);
         fs.writeFileSync(outPath, content);
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify(
-                { ok: true, agent, listener, fileName, path: outPath, bytes: content.length },
+                {
+                  ok: true,
+                  agent,
+                  listener,
+                  label: label || null,
+                  fileName: path.basename(outPath),
+                  serverFileName: fileName,
+                  path: outPath,
+                  bytes: content.length,
+                },
                 null,
                 2,
               ),

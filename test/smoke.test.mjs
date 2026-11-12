@@ -79,6 +79,7 @@ const EXPECTED = [
   "adaptix_agent_generate",
   "adaptix_agent_list",
   "adaptix_agent_remove",
+  "adaptix_agent_wait",
   "adaptix_creds_list",
   "adaptix_listener_create",
   "adaptix_listener_edit",
