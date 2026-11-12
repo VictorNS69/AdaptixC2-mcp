@@ -140,8 +140,8 @@ The password is held in memory only and is never logged or returned.
 This server exposes calls, not a plan. It starts no teamserver, chooses no
 target, and keeps no engagement state: which hosts get an agent, in what order,
 where artifacts are delivered and what is cleaned up belong to the client that
-runs it (in BITORIA that is `skills/c2/SKILL.md`, with
-`scripts/c2/adaptix_teamserver.sh` owning the teamserver itself).
+runs it — the agent, script or operator driving this server owns the teamserver
+and the plan; nothing here assumes a particular one.
 
 The primitives, in the order a client usually needs them:
 
