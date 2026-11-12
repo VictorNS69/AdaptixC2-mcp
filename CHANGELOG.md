@@ -2,6 +2,35 @@
 
 Versions below are this project's.
 
+## 0.3.0 — 2026-11-12
+
+Multi-host operation: a beacon on every host, without losing a build.
+
+### Added
+
+- `adaptix_agent_wait` — poll `/agent/list` until `expected` agents are
+  present, optionally only those matching an IP/hostname (`match`). A timeout
+  returns `ok:false` with the count and the agents it did see.
+- `adaptix_agent_generate` takes `label`: the target IP/hostname is folded into
+  the artifact filename (`beacon-10.10.10.5.elf`) and a taken name gets `-2`,
+  `-3` instead of being overwritten. The result carries `fileName`,
+  `serverFileName`, `label` and `path`.
+- `src/artifacts.ts` — filename/label handling, unit-tested.
+- `adaptix_listener_create` verifies the listener appears in `/listener/list`
+  before reporting success, and fails with the teamserver's own message
+  otherwise.
+- Listener lifecycle (`stop`, `pause`, `resume`, `edit`), `adaptix_agent_generate`,
+  `adaptix_agent_command_execute`, `adaptix_agent_remove`, `adaptix_task_cancel`,
+  `adaptix_task_delete` — the surface itself lands in this version; the
+  changelog had stopped at 0.2.0 while the tools kept arriving.
+- README/USAGE: the four-host runbook, the 17-tool table, the mutating
+  endpoints, and an honest status note (the scope gate is still not
+  implemented).
+
+### Changed
+
+- README no longer calls the server a read-only scaffold.
+
 ## 0.2.0 — 2026-11-11
 
 Artifact surface: generate agents and start listeners over the REST API.

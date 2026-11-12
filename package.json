@@ -1,7 +1,7 @@
 {
   "name": "adaptixc2-mcp",
-  "version": "0.2.0",
-  "description": "MCP server for AdaptixC2 — post-exploitation over the teamserver's authenticated REST control plane, with a scope-bound execution gate and an optional observer UI",
+  "version": "0.3.0",
+  "description": "MCP server for AdaptixC2 \u2014 post-exploitation over the teamserver's authenticated REST control plane, with a scope-bound execution gate and an optional observer UI",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -19,7 +19,7 @@
     "pentest",
     "red-team"
   ],
-  "author": "Víctor Nieves",
+  "author": "V\u00edctor Nieves",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2"
