@@ -21,6 +21,7 @@ import path from "node:path";
 
 import { AdaptixClient, AdaptixConfig, loadConfig } from "./adaptix.js";
 import { artifactPath } from "./artifacts.js";
+import { normalizeCommandArgs } from "./commands.js";
 
 const cfg: AdaptixConfig = loadConfig();
 
@@ -100,7 +101,7 @@ const tools: Tool[] = [
   {
     name: "adaptix_listener_create",
     description:
-      "Start a listener. name is the operator-facing listener name; type is the listener kind (e.g. BeaconHTTP, GopherTCP); config is a JSON string of that listener's options. Returns the teamserver's {ok, message}.",
+      "Start a listener. name is the operator-facing listener name; type is the listener kind (e.g. BeaconHTTP, GopherTCP); config is a JSON string of THAT TYPE's own options — the schema is the extender's, and the types differ: BeaconHTTP takes callback_addresses as an array of \"host:port\", GopherTCP takes it as a single string; encrypt_key must be exactly 32 hex characters and BeaconHTTP's page-payload must contain <<<PAYLOAD_DATA>>>. A rejected config is named one field at a time. Returns verified: true only when the listener is in /listener/list.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -199,7 +200,7 @@ const tools: Tool[] = [
   {
     name: "adaptix_agent_generate",
     description:
-      "Build an agent artifact. agent is the agent kind (beacon, kharon, gopher); listener_name is the listener it calls back to; config is a JSON string of build options (os, arch, format, sleep, ...); label names the host it is for and is folded into the filename. Writes the binary to output_dir and returns its path. Never overwrites an earlier build.",
+      "Build an agent artifact. agent is the agent kind (beacon, kharon, gopher); listener_name is the listener it calls back to; config is a JSON string of THAT agent's build options — beacon is Windows-only (arch x64|x86, format Exe|Service Exe|DLL|Shellcode, sleep a STRING, jitter an INT); gopher covers linux|windows|macos (arch amd64|arm64, format Binary EXE, reconn_timeout a STRING, reconn_count an INT); label names the host it is for and is folded into the filename. gopher/kharon compile from source inside the install tree, so a root-owned install fails with permission denied — stage the extender beside the teamserver config instead. Writes the binary to output_dir and returns its path. Never overwrites an earlier build.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -223,7 +224,7 @@ const tools: Tool[] = [
   {
     name: "adaptix_agent_command_execute",
     description:
-      "Run a command on an agent. cmdline is the agent command name (e.g. shell, sleep, cat, socks, exit); data is a JSON string of that command's arguments (e.g. {\"command\":\"id\"}). Set wait_answer true to get the result inline; otherwise poll adaptix_task_list for the output.",
+      "Run a command on an agent. cmdline is the agent command name (e.g. shell, powershell, cat, ls, cd, download, socks, exit); data is a JSON string of that command's arguments. Argument names are per-command and this server normalizes the obvious ones: shell/powershell take {\"cmd_params\":\"whoami\"}, cat/ls/cd/mkdir take {\"path\":\"C:\\\\Users\"}, download takes {\"file\":\"<remote path>\"}, cp/mv take {\"src\":…,\"dst\":…}. {\"command\":…}, {\"cmd\":…}, {\"cmdline\":…} and a bare string are translated to the right key for the commands in that table; anything else is passed through verbatim with a warning. Set wait_answer true to wait inline; otherwise poll adaptix_task_list — a task that reports 'undefined' means the key was wrong.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -520,13 +521,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const agentId = str("agent_id");
         const cmdline = str("cmdline");
         if (!agentId || !cmdline) throw new Error("agent_id and cmdline are required");
-        const data = str("data", "{}");
+        const normalized = normalizeCommandArgs(cmdline, str("data", "{}"));
         const waitAnswer = args["wait_answer"] === true;
+        const result = await api.agentCommandExecute(agentId, cmdline, normalized.data, waitAnswer);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(await api.agentCommandExecute(agentId, cmdline, data, waitAnswer), null, 2),
+              text: JSON.stringify(
+                {
+                  result,
+                  data_sent: normalized.data,
+                  ...(normalized.translatedFrom ? { translated_from: normalized.translatedFrom } : {}),
+                  ...(normalized.warning ? { warning: normalized.warning } : {}),
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
