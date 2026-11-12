@@ -25,8 +25,11 @@ The teamserver is a control plane: an operator's JWT can enumerate, execute,
 pivot and exfiltrate. The MCP holds that token, so the MCP process is as
 powerful as the operator account it logs in with.
 
-The mitigations are all enforced in this server, before a request leaves the
-process:
+The intended mitigations below would all be enforced in this server, before a
+request leaves the process. **None of them is implemented as of 0.3.0**: the
+mutating tools (listener lifecycle, artifact generation, command execution,
+agent cleanup) call the teamserver directly, so authorization has to come from
+the client that runs this MCP.
 
 - **Scope allowlist** (`ADAPTIX_SCOPE`, planned): agents/targets the MCP may
   touch. Everything else fails closed.

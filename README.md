@@ -18,11 +18,15 @@ just another client of the teamserver — the same relationship the GUI has.
 > "in scope".
 
 > [!NOTE]
-> **Status: 0.1.0 is a read-only scaffold.** It ships the repository layout
-> and the read-only recon tools (agents, listeners, tasks/output, targets,
-> credentials). Command execution, the scope-bound execution gate, and the
-> observer UI land in the next milestone. The sections below describe the
-> intended design so the shape is agreed before more code is written.
+> **Status: 0.3.0 — 17 tools, recon plus a mutating surface.** Read-only
+> recon (agents, listeners, tasks/output, targets, credentials); listener
+> lifecycle (create/stop/pause/resume/edit); artifact generation; command
+> execution; agent and task cleanup. The **scope-bound execution gate is still
+> not implemented** (`ADAPTIX_SCOPE`, `ADAPTIX_MCP_READ_ONLY`, the confirmed
+> checkpoint and the observer UI are the same planned design as in 0.1.0 —
+> README §The execution gate). Until it lands, the trust boundary around the
+> mutating tools is the client's, not this server's: run it where something
+> else gates the calls (an assessment framework's opt-in, a lab you own).
 
 ```
 MCP client ──stdio──> adaptixc2-mcp ──HTTPS REST + JWT──> Adaptix teamserver ──beacon──> agent
@@ -133,16 +137,49 @@ The password is held in memory only and is never logged or returned.
 
 ## Typical flow
 
+Recon:
+
 1. `adaptix_server_status` — confirm auth and the pinned version.
 2. `adaptix_agent_list` — enumerate connected agents.
 3. `adaptix_task_list` — read completed command output for an agent.
 
-Command execution (`adaptix_agent_command`) is the next milestone; output is
-asynchronous and read back through `adaptix_task_list`.
+### Beacons on several hosts (the CTF shape: 4 targets, 4 agents)
+
+The MCP does the C2 half of this; delivery to each host is yours (a web
+listener, an SMB share, an existing shell). One loop per host, then one wait:
+
+1. **One listener, once.** `adaptix_listener_create` with the type
+   (`BeaconHTTP`, `GopherTCP`, …) and that type's config JSON. It returns
+   `verified: true` only if `/listener/list` shows it. Name it for the
+   engagement (`ctf-http`) — every build below names it.
+2. **One artifact per host, labelled.** `adaptix_agent_generate`
+   `{agent:"beacon", listener_name:"ctf-http", config:"{\"os\":\"linux\",\"arch\":\"amd64\",\"format\":\"elf\"}", label:"10.10.10.5"}`
+   → `path: .../beacon-10.10.10.5.elf`. Repeat per host; no overwrite, no
+   ambiguity. `output_dir` should be the assessment's own artifact directory.
+3. **Deliver** each artifact to its host and execute it.
+4. **Wait for check-in.** `adaptix_agent_wait {expected:1, match:"10.10.10.5"}`
+   after each delivery, or `{expected:4}` once after the batch. It polls
+   `/agent/list` and returns the agents it saw; a timeout is `ok:false` with the
+   count, never a silent success. No check-in means the payload did not run,
+   could not egress, or calls a different listener — `adaptix_listener_list`
+   tells you which.
+5. **Task them.** `adaptix_agent_command_execute {agent_id, cmdline:"shell",
+   data:"{\"command\":\"id\"}", wait_answer:true}` for the inline answer, or
+   `wait_answer:false` and read `adaptix_task_list` (output is asynchronous).
+6. **Map agents to hosts** with `adaptix_agent_list`, and record the mapping:
+   the same host re-beaconing after a restart gets a new id.
+7. **Cleanup.** `adaptix_agent_remove {agent_ids:[...]}` for dead or finished
+   beacons, `adaptix_task_delete` for their task history. Stopping the listener
+   last (`adaptix_listener_stop`) keeps re-connects possible while you work.
+
+Agent-side command names and their `data` shapes are Adaptix's, not this
+server's: `shell`, `sleep`, `cat`, `cd`, `ps`, `socks`, `exit`, … A command the
+agent does not implement comes back as a task error in `adaptix_task_list`.
 
 ## The execution gate
 
-*(planned — the 0.1.0 read-only tools need no gate because they mutate nothing.)*
+*(planned, not implemented. 0.1.0's read-only tools needed no gate; 0.3.0's
+mutating tools do, and do not have one yet — see the status note above.)*
 
 Command execution and reachability changes go through three layers, all
 enforced in-process before a request leaves the MCP:
@@ -160,20 +197,42 @@ enforced in-process before a request leaves the MCP:
 
 ## Tools
 
-Read-only, always registered, `0.1.0`:
+All 17 are always registered. `annotations.destructiveHint` marks the ones that
+change teamserver state.
 
 | Tool | Maps to | Purpose |
 |---|---|---|
 | `adaptix_server_status` | `POST /login` | confirm auth, endpoint and pinned version |
 | `adaptix_agent_list` | `GET /agent/list` | list connected agents (beacons) |
-| `adaptix_listener_list` | `GET /listener/list` | list listeners and their state |
+| `adaptix_agent_wait` | `GET /agent/list` (polled) | wait until N agents check in, optionally only those matching an IP/hostname |
+| `adaptix_listener_list` | `GET /listener/list` | listeners and their state |
+| `adaptix_listener_create` | `POST /listener/create` | start a listener, then **verify** it appears in `/listener/list` |
+| `adaptix_listener_stop` | `POST /listener/stop` | stop a listener |
+| `adaptix_listener_pause` | `POST /listener/pause` | pause a listener |
+| `adaptix_listener_resume` | `POST /listener/resume` | resume a listener |
+| `adaptix_listener_edit` | `POST /listener/edit` | rewrite a listener's config |
+| `adaptix_agent_generate` | `POST /agent/generate` | build an artifact; write it locally under a label, never overwriting |
+| `adaptix_agent_command_execute` | `POST /agent/command/execute` | run an agent command, optionally waiting for its answer |
+| `adaptix_agent_remove` | `POST /agent/remove` | remove agents (dead beacons, cleanup) |
 | `adaptix_task_list` | `GET /agent/task/list` | completed tasks for an agent, with command output |
-| `adaptix_targets_list` | `GET /targets/list` | list tracked targets |
-| `adaptix_creds_list` | `GET /creds/list` | list stored credentials |
+| `adaptix_task_cancel` | `POST /agent/task/cancel` | cancel queued tasks |
+| `adaptix_task_delete` | `POST /agent/task/delete` | delete completed tasks |
+| `adaptix_targets_list` | `GET /targets/list` | tracked targets |
+| `adaptix_creds_list` | `GET /creds/list` | stored credentials |
 
-Mutating tools (`adaptix_agent_command`, `adaptix_tunnel_start`,
-`adaptix_listener_create`, …) and the observer UI are the next milestone and
-are not yet registered.
+Two behaviours worth knowing, both learned from the multi-host case:
+
+- `adaptix_agent_generate` takes a `label` (the target IP or hostname) and folds
+  it into the filename. The teamserver returns the same build name for every
+  host, so without a label the second build overwrote the first and nothing
+  said which artifact was for which host. It also refuses to overwrite: a taken
+  name gets `-2`, `-3`, and the result carries `fileName`, `serverFileName`,
+  `label` and `path`.
+- `adaptix_listener_create` confirms the listener is actually in
+  `/listener/list` before reporting success. The teamserver answers these calls
+  with HTTP 200 and an `{ok, message}` body, so a rejected config used to read
+  as a started listener — the failure that surfaces 20 minutes later as "no
+  beacons ever arrived".
 
 ## HTTP endpoints used
 
@@ -188,6 +247,13 @@ surface (all JSON, all behind the JWT bearer token):
   `TaskId`, `CmdLine`, `Message` and `Text` (the command output).
 - `GET /targets/list` — targets.
 - `GET /creds/list` — credentials.
+- `POST /listener/create|stop|pause|resume|edit` — `{name, type, config?}`;
+  answer is `{ok, message}` with HTTP 200 even when the listener was rejected.
+- `POST /agent/generate` — `{agent, listener_name:[...], config}`; returns the
+  artifact as `base64(fileName):base64(content)` in `message`.
+- `POST /agent/command/execute` — `{id, cmdline, data, wait_answer, ui:false}`.
+- `POST /agent/remove` — `{agent_id_array:[...]}`.
+- `POST /agent/task/cancel|delete` — `{agent_id, tasks_array:[...]}`.
 
 Command output is asynchronous: a command is enqueued on the agent, the beacon
 picks it up, and the result is written back and surfaced through
@@ -219,8 +285,10 @@ authorization is coarse (operators + a password).
 
 ## What this server does not do
 
-- It does not generate, upload or clean up agent binaries.
-- It does not decide scope.
+- It does not deliver an artifact to a host or execute it there — it builds the
+  binary locally and writes it to `ADAPTIX_OUTPUT_DIR`; delivery and first
+  execution are yours.
+- It does not decide scope — there is no `ADAPTIX_SCOPE` check yet.
 - It does not speak the WebSocket sync channel (real-time console) — output is
   read from the completed-task REST endpoint.
 - It does not ship or link any Adaptix code; it only calls its HTTP API.

