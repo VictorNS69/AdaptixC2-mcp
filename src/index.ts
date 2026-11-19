@@ -238,6 +238,37 @@ const tools: Tool[] = [
     annotations: { destructiveHint: true },
   },
   {
+    name: "adaptix_agent_raw_command",
+    description:
+      "Run a command line on an agent through POST /agent/command/raw, which PARSES the whole line and returns a parse/validation error in `message`. Use this for commands whose arguments are positional — `link smb <host> <pipe>`, `link tcp <host> <port>`, `unlink <id>` — because adaptix_agent_command_execute answers ok:true with an empty message even when nothing was dispatched, so it cannot tell a bad argument from a queued command.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: AGENT_ID,
+        cmdline: { type: "string", description: 'Full command line, e.g. "link smb 10.10.132.146 ms01pipe1".' },
+      },
+      required: ["agent_id", "cmdline"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
+    name: "adaptix_agent_link",
+    description:
+      "Link a parent agent to a child pivot beacon (Adaptix linked agents). Builds `link smb <target> <pipename>` or `link tcp <target> <port>`, sends it on the raw endpoint, then verifies against a before/after /agent/list diff (falling back to the parent task message `[<parent>]===[<child>]`) and returns verified, detected_by and the child record. A linked child receives its commands THROUGH the parent, so it renders chained in the Sessions Graph rather than as a relay edge: prefer it over rportfwd, which dies when the parent beacon restarts and carries only the registration exchange. Note that a linked child's a_last_tick stays at its registration time — liveness is proven with a command plus adaptix_task_list, not with the tick.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent_id: AGENT_ID,
+        link_type: { type: "string", enum: ["smb", "tcp"], description: "smb for a BeaconSMB child (named pipe), tcp for a BeaconTCP child." },
+        target: { type: "string", description: "Child beacon host (IP or hostname) that hosts the pipe/port." },
+        pipename: { type: "string", description: "Pipe name, required for link_type=smb." },
+        port: { type: "number", description: "Port, required for link_type=tcp." },
+      },
+      required: ["agent_id", "link_type", "target"],
+    },
+    annotations: { destructiveHint: true },
+  },
+  {
     name: "adaptix_agent_remove",
     description:
       "Remove agents from the teamserver (e.g. dead beacons). agent_ids is the list of agent ids from adaptix_agent_list.",
@@ -534,6 +565,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   data_sent: normalized.data,
                   ...(normalized.translatedFrom ? { translated_from: normalized.translatedFrom } : {}),
                   ...(normalized.warning ? { warning: normalized.warning } : {}),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      case "adaptix_agent_raw_command": {
+        const agentId = str("agent_id");
+        const cmdline = str("cmdline");
+        if (!agentId || !cmdline) throw new Error("agent_id and cmdline are required");
+        const res = (await api.agentCommandRaw(agentId, cmdline)) as Record<string, unknown> | null;
+        const msg = res && typeof res === "object" ? String(res["message"] ?? "") : "";
+        const okFlag = !(res && typeof res === "object" && res["ok"] === false);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: okFlag, message: msg, agent_id: agentId, cmdline }, null, 2) }] };
+      }
+      case "adaptix_agent_link": {
+        const agentId = str("agent_id");
+        const linkType = str("link_type").toLowerCase();
+        const target = str("target");
+        const pipename = str("pipename");
+        const port = args["port"] !== undefined && args["port"] !== null ? Number(args["port"]) : undefined;
+        if (!agentId || !target) throw new Error("agent_id and target are required");
+        if (linkType !== "smb" && linkType !== "tcp") throw new Error("link_type must be smb or tcp");
+        if (linkType === "smb" && !pipename) throw new Error("pipename is required for link_type=smb");
+        if (linkType === "tcp" && !port) throw new Error("port is required for link_type=tcp");
+        const cmdline = linkType === "smb" ? `link smb ${target} ${pipename}` : `link tcp ${target} ${port}`;
+        const listAgents = async (): Promise<Record<string, unknown>[]> => {
+          const list = (await api.agentList()) as unknown;
+          return (Array.isArray(list) ? list : ((list as Record<string, unknown>)?.["agents"] ?? [])) as Record<string, unknown>[];
+        };
+        // Snapshot first: the honest signal for a linked child is a NEW agent,
+        // not a parent id inside a field that never carries one. Measured
+        // 2026-11-19: child 4f6c478f/DC01 linked to parent ec611833 showed up
+        // with a_external_ip "" and a_listener "ch5-smb" — the earlier matcher
+        // (parent id or /pipe|link/ in a_external_ip) therefore always returned
+        // null while the link had in fact worked.
+        const before = await listAgents();
+        const beforeIds = new Set(before.map((a) => String(a["a_id"] ?? "")));
+        const res = (await api.agentCommandRaw(agentId, cmdline)) as Record<string, unknown> | null;
+        const msg = res && typeof res === "object" ? String(res["message"] ?? "") : "";
+        const okFlag = !(res && typeof res === "object" && res["ok"] === false);
+        let linkedAgent: Record<string, unknown> | null = null;
+        let detectedBy = "";
+        for (let attempt = 0; attempt < 10 && !linkedAgent; attempt += 1) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 3000));
+          const fresh = (await listAgents()).filter((a) => !beforeIds.has(String(a["a_id"] ?? "")));
+          const targetKey = target.toLowerCase();
+          linkedAgent =
+            fresh.find((a) => {
+              const internal = String(a["a_internal_ip"] ?? "").toLowerCase();
+              const computer = String(a["a_computer"] ?? "").toLowerCase();
+              return (
+                internal === targetKey ||
+                internal.includes(targetKey) ||
+                computer === targetKey ||
+                computer.includes(targetKey)
+              );
+            }) ?? (fresh.length === 1 ? fresh[0] : null);
+          if (linkedAgent) detectedBy = "agent-list diff";
+        }
+        // Second evidence path: the parent's own task log records the pair as
+        // "[<parent>]===[<child>]", which appears even when the child has not
+        // settled into the list yet.
+        let taskMarker: string | null = null;
+        if (!linkedAgent) {
+          const tasks = (await api.taskList(agentId, 10, 0)) as unknown;
+          const rows = (Array.isArray(tasks) ? tasks : ((tasks as Record<string, unknown>)?.["tasks"] ?? [])) as Record<string, unknown>[];
+          const marker = rows.find((row) => String(row["a_message"] ?? "").includes(`[${agentId}]===[`));
+          if (marker) {
+            taskMarker = String(marker["a_message"] ?? "");
+            detectedBy = "task message";
+          }
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  ok: okFlag,
+                  message: msg,
+                  cmdline,
+                  verified: Boolean(linkedAgent || taskMarker),
+                  detected_by: detectedBy,
+                  linked_agent: linkedAgent,
+                  link_evidence: taskMarker,
+                  note:
+                    "A linked child's a_last_tick stays at its registration time and is NOT a liveness signal — " +
+                    "prove the channel by running a command on the child and reading adaptix_task_list for its output.",
                 },
                 null,
                 2,

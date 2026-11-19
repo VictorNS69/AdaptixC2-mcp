@@ -212,6 +212,20 @@ export class AdaptixClient {
     });
   }
 
+  /**
+   * Raw command line. The teamserver parses the whole line
+   * (`TsAxScriptParseAndExecute`) and reports a parse/validation failure in
+   * `message`, whereas `/agent/command/execute` answers `{ok:true, message:""}`
+   * even when nothing was dispatched — measured 2026-11-18 on `link smb …`,
+   * which produced no task and no error through execute.
+   *
+   * Use this for commands whose arguments are positional in the line (link /
+   * unlink) and for anything the normalized `execute` table does not cover.
+   */
+  agentCommandRaw(agentId: string, cmdline: string): Promise<unknown> {
+    return this.request("POST", "/agent/command/raw", { id: agentId, cmdline });
+  }
+
   agentRemove(agentIds: string[]): Promise<unknown> {
     return this.request("POST", "/agent/remove", { agent_id_array: agentIds });
   }

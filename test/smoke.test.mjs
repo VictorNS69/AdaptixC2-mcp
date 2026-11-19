@@ -77,7 +77,9 @@ function startServer() {
 const EXPECTED = [
   "adaptix_agent_command_execute",
   "adaptix_agent_generate",
+  "adaptix_agent_link",
   "adaptix_agent_list",
+  "adaptix_agent_raw_command",
   "adaptix_agent_remove",
   "adaptix_agent_wait",
   "adaptix_creds_list",
