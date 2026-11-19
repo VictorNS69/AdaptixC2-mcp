@@ -29,6 +29,24 @@ const SECONDARY_ARGS: Record<string, string[]> = {
   mv: ["src", "dst"],
 };
 
+/**
+ * Commands whose own arguments hang off a subcommand. Measured 2026-11-19 on a
+ * v1.2 beacon: these are NOT addressable positionally. `socks start 1080` through
+ * /agent/command/raw parses the subcommand as the port ("port must be from 1 to
+ * 65535"), and a JSON body without the `command` key is rejected with "'command'
+ * must be set". The working shape is a Data object carrying `command`, a
+ * `subcommand`, and the subcommand's own named arguments — this table builds
+ * that shape from a natural line and validates the count.
+ */
+const SUBCOMMAND_ORDERS: Record<string, Record<string, string[]>> = {
+  rportfwd: { start: ["lport", "fwdhost", "fwdport"], stop: ["lport"] },
+  socks: { start: ["address", "port"], stop: ["port"] },
+  link: { smb: ["target", "pipename"], tcp: ["target", "port"] },
+};
+
+/** Arguments in those orders that the agent parses as integers. */
+const NUMERIC_ARGS = ["lport", "fwdport", "port"];
+
 /** Keys a caller plausibly reaches for when it means "the command line". */
 const LINE_ALIASES = ["command", "cmd", "args", "cmdline", "commandline", "line"];
 
@@ -67,6 +85,62 @@ export function normalizeCommandArgs(cmdline: string, data: string): NormalizedC
   const cmd = (cmdline ?? "").trim().toLowerCase();
   const primary = PRIMARY_ARG[cmd];
   const secondary = SECONDARY_ARGS[cmd] ?? [];
+
+  const subOrders = SUBCOMMAND_ORDERS[cmd];
+  if (subOrders) {
+    const { obj, raw } = decode(data);
+    const out: Record<string, unknown> = { command: cmd, ...(obj ?? {}) };
+    let translatedFrom: string | undefined;
+
+    // A bare line ("start 12099 10.10.108.146 5985") is the natural way to
+    // describe this, so accept it and map the tokens onto the named keys.
+    const line = (obj === null ? raw : "") || (typeof out["line"] === "string" ? String(out["line"]) : "");
+    if (line) {
+      const tokens = line.trim().split(/\s+/);
+      const subcommand = tokens.shift() ?? "";
+      const order = subOrders[subcommand];
+      if (!order) {
+        throw new Error(`${cmd}: unknown subcommand '${subcommand}' (known: ${Object.keys(subOrders).join(", ")})`);
+      }
+      if (tokens.length !== order.length) {
+        throw new Error(
+          `${cmd} ${subcommand}: expected ${order.length} argument(s) (${order.join(", ")}), got ${tokens.length}`,
+        );
+      }
+      out["subcommand"] = subcommand;
+      order.forEach((key, index) => {
+        const token = tokens[index];
+        if (NUMERIC_ARGS.includes(key)) {
+          const asNumber = Number(token);
+          if (!Number.isInteger(asNumber) || asNumber < 1 || asNumber > 65535) {
+            throw new Error(`${cmd} ${subcommand}: '${key}' must be an integer port 1-65535, got '${token}'`);
+          }
+          out[key] = asNumber;
+        } else {
+          out[key] = token;
+        }
+      });
+      delete out["line"];
+      translatedFrom = "line";
+    }
+
+    if (typeof out["subcommand"] !== "string" || String(out["subcommand"]).trim() === "") {
+      throw new Error(
+        `${cmd}: a subcommand is required (${Object.keys(subOrders).join(", ")}); pass it as {"subcommand": "...", ...} or as a line`,
+      );
+    }
+    const subcommand = String(out["subcommand"]).trim();
+    const order = subOrders[subcommand];
+    if (!order) {
+      throw new Error(`${cmd}: unknown subcommand '${subcommand}' (known: ${Object.keys(subOrders).join(", ")})`);
+    }
+    for (const key of order) {
+      if (out[key] === undefined || out[key] === null || String(out[key]).trim() === "") {
+        throw new Error(`${cmd} ${subcommand}: missing required argument '${key}'`);
+      }
+    }
+    return { data: JSON.stringify(out), translatedFrom };
+  }
 
   if (!primary) {
     const passthrough = (data ?? "{}").trim() || "{}";

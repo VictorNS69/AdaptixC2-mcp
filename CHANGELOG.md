@@ -21,6 +21,17 @@ Linked beacons, and a way to see why a command did not run.
   the Sessions Graph, and its transport does not depend on a reverse port
   forward that dies with the parent session.
 
+### Added
+
+- Subcommand argument table for `rportfwd`, `socks` and `link`. These cannot be
+  driven positionally through `/agent/command/raw` — measured 2026-11-19,
+  `socks start 1080` parses the subcommand as the port and a JSON body without
+  a `command` key is rejected with "'command' must be set". `execute` now takes
+  either a natural line (`rportfwd start 12099 10.10.108.146 5985`) or the
+  explicit object (`{"command":"rportfwd","subcommand":"start","lport":…,
+  "fwdhost":…,"fwdport":…}`), validates the argument count and port range, and
+  names the offending argument instead of forwarding `'undefined'`.
+
 ### Fixed
 
 - `adaptix_agent_link` verification. The first implementation looked for the

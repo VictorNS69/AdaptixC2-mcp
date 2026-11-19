@@ -49,9 +49,60 @@ test("powershell uses the same cmd_params key", () => {
 });
 
 test("an unknown command passes through with a warning, never a guess", () => {
-  const r = normalizeCommandArgs("socks", "1234");
+  const r = normalizeCommandArgs("frobnicate", "1234");
   assert.strictEqual(r.data, "1234");
   assert.match(r.warning, /not in this server's argument table/);
+});
+
+test("subcommand commands take a natural line and build the named Data shape", () => {
+  // Measured 2026-11-19: these cannot be driven positionally through
+  // /agent/command/raw — `socks start 1080` parses "start" as the port.
+  const rp = normalizeCommandArgs("rportfwd", "start 12099 10.10.108.146 5985");
+  assert.deepStrictEqual(JSON.parse(rp.data), {
+    command: "rportfwd",
+    subcommand: "start",
+    lport: 12099,
+    fwdhost: "10.10.108.146",
+    fwdport: 5985,
+  });
+  assert.strictEqual(rp.translatedFrom, "line");
+
+  const socks = normalizeCommandArgs("socks", "start 127.0.0.1 1080");
+  assert.deepStrictEqual(JSON.parse(socks.data), {
+    command: "socks",
+    subcommand: "start",
+    address: "127.0.0.1",
+    port: 1080,
+  });
+
+  const link = normalizeCommandArgs("link", "smb 10.10.108.146 ms01pipe1");
+  assert.deepStrictEqual(JSON.parse(link.data), {
+    command: "link",
+    subcommand: "smb",
+    target: "10.10.108.146",
+    pipename: "ms01pipe1",
+  });
+});
+
+test("subcommand commands accept the explicit JSON shape too", () => {
+  const r = normalizeCommandArgs(
+    "rportfwd",
+    JSON.stringify({ command: "rportfwd", subcommand: "start", lport: 12098, fwdhost: "10.10.108.146", fwdport: 445 }),
+  );
+  assert.deepStrictEqual(JSON.parse(r.data), {
+    command: "rportfwd",
+    subcommand: "start",
+    lport: 12098,
+    fwdhost: "10.10.108.146",
+    fwdport: 445,
+  });
+});
+
+test("subcommand commands fail loudly on a bad port, unknown subcommand, or missing argument", () => {
+  assert.throws(() => normalizeCommandArgs("socks", "start 127.0.0.1 notaport"), /port.*1-65535/);
+  assert.throws(() => normalizeCommandArgs("rportfwd", "bogus 1234"), /unknown subcommand 'bogus'/);
+  assert.throws(() => normalizeCommandArgs("rportfwd", JSON.stringify({ subcommand: "start" })), /missing required argument 'lport'/);
+  assert.throws(() => normalizeCommandArgs("link", "smb 10.10.108.146"), /expected 2 argument/);
 });
 
 test("extra keys survive the translation", () => {
